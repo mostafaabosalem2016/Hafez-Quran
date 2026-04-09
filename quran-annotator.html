@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="theme-color" content="#7a5c10">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="المصحف الشريف">
+<title>المصحف الشريف</title>
+
+<!-- Service Worker للعمل بدون إنترنت -->
+<script>
+(function(){
+  const CACHE = 'mushaf-v1';
+  const URLS  = [
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'
+  ];
+
+  if('serviceWorker' in navigator){
+    // بناء الـ Service Worker كـ Blob لأننا ملف واحد
+    const swCode = `
+const CACHE_NAME = '${CACHE}';
+const STATIC_URLS = ${JSON.stringify(URLS)};
+
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(CACHE_NAME).then(cache => cache.addAll(STATIC_URLS))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(keys.filter(k=>k!==CACHE_NAME).map(k=>caches.delete(k)))
+    )
+  );
+  self.clients.claim();
+});
+
+self.addEventListener('fetch', e => {
+  e.respondWith(
+    caches.match(e.request).then(cached => {
+      if(cached) return cached;
+      return fetch(e.request).then(resp => {
+        if(resp && resp.status===200 && resp.type!=='opaque'){
+          const clone = resp.clone();
+          caches.open(CACHE_NAME).then(c => c.put(e.request, clone));
+        }
+        return resp;
+      }).catch(() => cached);
+    })
+  );
+});
+`;
+    const blob = new Blob([swCode], {type:'application/javascript'});
+    const swUrl = URL.createObjectURL(blob);
+    navigator.serviceWorker.register(swUrl, {scope:'/'})
+      .then(()=>console.log('SW registered ✅'))
+      .catch(e=>console.warn('SW failed (normal in file://):', e));
+  }
+})();
+</script>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+:root{
+  --gold:#c8a96e;--gold-l:#e8d5a3;--gold-d:#7a5c10;
+  --bg:#0d0800;--parch:#fdf6e3;--parch2:#f5e6c8;
+  --ink:#1a0a00;--panel:rgba(15,8,0,0.96);
+}
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:var(--bg);font-family:'Segoe UI',Tahoma,Arial,sans-serif;display:flex;flex-direction:column;height:100vh;overflow:hidden;}
+
+/* HEADER */
+header{background:linear-gradient(90deg,var(--gold-d),var(--gold),var(--gold-d));padding:8px 14px;display:flex;align-items:center;gap:10px;box-shadow:0 2px 16px rgba(200,169,110,.5);flex-shrink:0;z-index:200;}
+.app-title{font-size:17px;font-weight:700;color:var(--ink);}
+.app-title small{display:block;font-size:10px;opacity:.6;font-weight:400;}
+header .sp{flex:1;}
+label.hdr-lbl{display:inline-flex;align-items:center;gap:7px;background:var(--ink);color:var(--gold-l);padding:7px 16px;border-radius:20px;font-size:13px;cursor:pointer;border:1.5px solid var(--gold-d);transition:.2s;}
+label.hdr-lbl:hover{background:#3a1a00;}
+#file-input{display:none;}
+
+/* LAYOUT */
+.layout{display:flex;flex:1;overflow:hidden;}
+
+/* SIDEBAR */
+#sidebar{width:0;overflow:hidden;background:var(--panel);border-left:1px solid rgba(200,169,110,.2);transition:width .3s;flex-shrink:0;display:flex;flex-direction:column;}
+#sidebar.open{width:255px;}
+.sb-head{padding:11px 14px;border-bottom:1px solid rgba(200,169,110,.15);display:flex;align-items:center;justify-content:space-between;}
+.sb-head span{color:var(--gold);font-size:14px;font-weight:600;}
+.sb-close{background:none;border:none;color:var(--gold-l);font-size:18px;cursor:pointer;line-height:1;}
+#toc-list{flex:1;overflow-y:auto;padding:6px 0;}
+#toc-list::-webkit-scrollbar{width:4px;}
+#toc-list::-webkit-scrollbar-thumb{background:var(--gold-d);border-radius:2px;}
+.toc-item{padding:9px 14px;color:var(--gold-l);font-size:13px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.04);transition:.15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.toc-item:hover{background:rgba(200,169,110,.12);color:var(--gold);}
+.toc-empty{color:rgba(200,169,110,.4);font-size:13px;text-align:center;padding:28px 14px;line-height:1.7;}
+
+/* MAIN */
+#main{flex:1;display:flex;flex-direction:column;overflow:hidden;}
+
+/* TOOLBAR */
+#toolbar{background:rgba(18,8,0,.97);border-bottom:1px solid rgba(200,169,110,.2);padding:6px 10px;display:flex;align-items:center;gap:5px;flex-wrap:wrap;flex-shrink:0;}
+.tg{display:flex;align-items:center;gap:3px;background:rgba(255,255,255,.04);border-radius:9px;padding:3px;border:1px solid rgba(200,169,110,.1);}
+.tg-lbl{color:var(--gold);font-size:10px;opacity:.55;padding:0 3px;}
+.tbtn{width:35px;height:35px;border-radius:7px;border:2px solid transparent;background:transparent;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:16px;transition:.18s;color:var(--gold-l);}
+.tbtn:hover{background:rgba(200,169,110,.15);}
+.tbtn.on{background:linear-gradient(135deg,var(--gold-d),var(--gold));border-color:var(--gold-l);color:var(--ink);}
+.tbtn svg{width:18px;height:18px;fill:currentColor;}
+
+/* mode */
+.mode-btn{display:flex;align-items:center;gap:5px;padding:6px 11px;border-radius:8px;font-size:12px;border:1.5px solid;cursor:pointer;transition:.2s;font-weight:600;white-space:nowrap;}
+.mode-btn.nav{background:rgba(26,92,58,.15);color:#5dd68c;border-color:rgba(93,214,140,.3);}
+.mode-btn.draw{background:rgba(200,100,30,.15);color:#f0a060;border-color:rgba(240,160,96,.3);}
+
+/* slider */
+.sl-row{display:flex;align-items:center;gap:5px;padding:0 5px;}
+.sl-lbl{color:var(--gold-l);font-size:11px;white-space:nowrap;}
+input[type=range]{-webkit-appearance:none;height:4px;border-radius:2px;background:rgba(200,169,110,.25);outline:none;}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:13px;height:13px;border-radius:50%;background:var(--gold);cursor:pointer;}
+#sz-sl{width:62px;}
+#op-sl{width:85px;}
+.val-lbl{color:var(--gold-l);font-size:11px;min-width:24px;text-align:center;}
+
+/* swatches */
+.sws{display:flex;gap:3px;padding:0 3px;}
+.sw{width:21px;height:21px;border-radius:50%;border:2px solid rgba(200,169,110,.35);cursor:pointer;transition:.18s;flex-shrink:0;}
+.sw.on{border-color:#fff;box-shadow:0 0 0 2px var(--gold);transform:scale(1.2);}
+
+/* opacity strip */
+.op-row{display:flex;align-items:center;gap:5px;background:rgba(255,255,255,.04);border:1px solid rgba(200,169,110,.1);border-radius:8px;padding:4px 8px;}
+.op-row label{color:var(--gold-l);font-size:11px;white-space:nowrap;}
+
+/* page nav */
+.pnav{display:flex;align-items:center;gap:4px;margin-right:auto;}
+.pnav-btn{width:28px;height:28px;border-radius:7px;background:rgba(200,169,110,.1);border:1px solid rgba(200,169,110,.22);color:var(--gold-l);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:.15s;}
+.pnav-btn:hover{background:rgba(200,169,110,.22);}
+.pnav-btn:disabled{opacity:.22;cursor:not-allowed;}
+#pg-ind{color:var(--gold-l);font-size:12px;min-width:60px;text-align:center;}
+#pg-jump{width:46px;background:rgba(255,255,255,.07);border:1px solid rgba(200,169,110,.22);color:var(--gold-l);border-radius:6px;padding:3px 5px;font-size:12px;text-align:center;}
+#pg-jump:focus{outline:none;border-color:var(--gold);}
+
+/* zoom */
+.zm-row{display:flex;align-items:center;gap:3px;}
+.zm-btn{width:25px;height:25px;border-radius:6px;background:rgba(200,169,110,.08);border:1px solid rgba(200,169,110,.18);color:var(--gold-l);cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;transition:.15s;}
+.zm-btn:hover{background:rgba(200,169,110,.2);}
+#zm-lbl{color:var(--gold-l);font-size:11px;min-width:38px;text-align:center;}
+
+/* action */
+.act-btn{display:flex;align-items:center;gap:4px;padding:5px 10px;border-radius:7px;font-size:12px;cursor:pointer;transition:.2s;border:1.5px solid;white-space:nowrap;}
+.toc-btn{background:rgba(200,169,110,.07);color:var(--gold);border-color:rgba(200,169,110,.18);}
+.toc-btn:hover{background:rgba(200,169,110,.17);}
+.undo-btn{background:rgba(200,169,110,.07);color:var(--gold-l);border-color:rgba(200,169,110,.18);}
+.undo-btn:hover{background:rgba(200,169,110,.17);}
+.save-btn{background:rgba(26,92,58,.18);color:#7de8a8;border-color:rgba(125,232,168,.22);}
+.save-btn:hover{background:rgba(26,92,58,.32);}
+
+/* CANVAS */
+#canvas-area{flex:1;overflow:auto;display:flex;justify-content:center;align-items:flex-start;padding:16px;background:radial-gradient(ellipse at center,#1a0800 0%,#060300 100%);}
+#canvas-area::-webkit-scrollbar{width:6px;height:6px;}
+#canvas-area::-webkit-scrollbar-track{background:rgba(0,0,0,.3);}
+#canvas-area::-webkit-scrollbar-thumb{background:var(--gold-d);border-radius:3px;}
+#page-wrap{position:relative;display:inline-block;box-shadow:0 20px 60px rgba(0,0,0,.8);}
+#pdf-cv{display:block;}
+#draw-cv{position:absolute;top:0;left:0;}
+
+/* UPLOAD */
+#upload-screen{flex:1;display:flex;align-items:center;justify-content:center;padding:30px;min-width:300px;}
+.upload-card{background:linear-gradient(145deg,var(--parch),var(--parch2));border:3px solid var(--gold);border-radius:20px;padding:46px 38px;text-align:center;max-width:420px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,.6);position:relative;}
+.upload-card::before{content:'';position:absolute;top:0;left:0;right:0;height:4px;background:linear-gradient(90deg,var(--gold-d),var(--gold-l),var(--gold-d));border-radius:20px 20px 0 0;}
+.orn{font-size:54px;margin-bottom:12px;display:block;}
+.upload-card h2{font-size:22px;color:var(--gold-d);margin-bottom:8px;}
+.upload-card p{color:#5a3e1b;margin-bottom:26px;font-size:14px;line-height:1.8;}
+label.big-lbl{display:inline-flex;align-items:center;gap:10px;background:linear-gradient(135deg,var(--gold-d),var(--gold));color:var(--parch);padding:13px 30px;border-radius:50px;font-size:15px;cursor:pointer;transition:.25s;box-shadow:0 4px 20px rgba(139,105,20,.4);}
+label.big-lbl:hover{transform:translateY(-2px);box-shadow:0 6px 28px rgba(139,105,20,.6);}
+.hint{margin-top:13px;font-size:12px;color:#8b6914;opacity:.6;}
+
+/* LOADING */
+#loading{position:fixed;inset:0;background:rgba(6,3,0,.88);display:none;align-items:center;justify-content:center;z-index:999;flex-direction:column;gap:14px;}
+#loading.show{display:flex;}
+.spin{width:44px;height:44px;border:3px solid rgba(200,169,110,.2);border-top-color:var(--gold);border-radius:50%;animation:sp .8s linear infinite;}
+@keyframes sp{to{transform:rotate(360deg);}}
+.load-txt{color:var(--gold-l);font-size:15px;}
+
+/* TOAST */
+#toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%) translateY(70px);background:rgba(12,6,0,.96);color:var(--gold-l);padding:9px 22px;border-radius:50px;border:1px solid rgba(200,169,110,.28);font-size:13px;z-index:9999;transition:transform .3s;pointer-events:none;white-space:nowrap;}
+#toast.show{transform:translateX(-50%) translateY(0);}
+
+/* FULLSCREEN OVERLAY */
+#fs-overlay{
+  display:none;position:fixed;inset:0;z-index:500;
+  background:radial-gradient(ellipse at center,#1a0800 0%,#030100 100%);
+  flex-direction:column;align-items:center;justify-content:center;
+  overflow:hidden;
+}
+#fs-overlay.show{display:flex;}
+
+/* صفحة الـ fullscreen */
+#fs-page-wrap{position:relative;max-width:100vw;max-height:100vh;display:flex;align-items:center;justify-content:center;}
+#fs-pdf-cv{display:block;max-width:100vw;max-height:100vh;object-fit:contain;}
+#fs-draw-cv{position:absolute;top:0;left:0;}
+
+/* أسهم التنقل العائمة */
+.fs-arrow{
+  position:fixed;top:50%;transform:translateY(-50%);
+  width:52px;height:52px;border-radius:50%;
+  background:rgba(200,169,110,.18);border:2px solid rgba(200,169,110,.4);
+  color:var(--gold-l);font-size:26px;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;
+  transition:all .2s;backdrop-filter:blur(6px);z-index:510;
+  user-select:none;-webkit-user-select:none;
+}
+.fs-arrow:hover{background:rgba(200,169,110,.45);color:#fff;transform:translateY(-50%) scale(1.1);}
+.fs-arrow:active{transform:translateY(-50%) scale(.95);}
+.fs-arrow:disabled{opacity:.15;cursor:not-allowed;}
+#fs-prev{right:12px;}
+#fs-next{left:12px;}
+
+/* شريط معلومات الـ fullscreen */
+#fs-bar{
+  position:fixed;bottom:0;left:0;right:0;
+  background:linear-gradient(0deg,rgba(0,0,0,.85) 0%,transparent 100%);
+  padding:16px 20px 12px;
+  display:flex;align-items:center;justify-content:center;gap:14px;
+  z-index:510;transition:opacity .3s;
+}
+#fs-bar.hidden{opacity:0;pointer-events:none;}
+#fs-pg-lbl{color:var(--gold-l);font-size:14px;min-width:70px;text-align:center;}
+#fs-pg-input{
+  width:60px;background:rgba(255,255,255,.1);border:1px solid rgba(200,169,110,.35);
+  color:var(--gold-l);border-radius:8px;padding:5px 8px;font-size:13px;text-align:center;outline:none;
+}
+#fs-pg-input:focus{border-color:var(--gold);}
+.fs-bar-btn{
+  background:rgba(200,169,110,.12);border:1px solid rgba(200,169,110,.28);
+  color:var(--gold-l);border-radius:8px;padding:5px 12px;font-size:12px;
+  cursor:pointer;transition:.18s;white-space:nowrap;
+}
+.fs-bar-btn:hover{background:rgba(200,169,110,.25);}
+.fs-exit-btn{
+  background:rgba(180,40,40,.2);border:1px solid rgba(220,80,80,.3);
+  color:#ff9a9a;border-radius:8px;padding:5px 12px;font-size:12px;
+  cursor:pointer;transition:.18s;
+}
+.fs-exit-btn:hover{background:rgba(180,40,40,.4);}
+
+/* swipe hint */
+#swipe-hint{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
+  background:rgba(0,0,0,.75);color:var(--gold-l);
+  padding:12px 24px;border-radius:50px;font-size:14px;
+  border:1px solid rgba(200,169,110,.3);z-index:520;
+  opacity:0;transition:opacity .4s;pointer-events:none;
+}
+#swipe-hint.show{opacity:1;}
+
+@media(max-width:600px){
+  .tg-lbl,.sl-lbl{display:none;}
+  #sz-sl{width:48px;}
+  #op-sl{width:60px;}
+  #sidebar.open{width:210px;}
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="app-title">المصحف الشريف <small>القارئ التفاعلي</small></div>
+  <div class="sp"></div>
+  <label class="hdr-lbl" for="file-input">📂 تحميل PDF</label>
+  <input type="file" id="file-input" accept="application/pdf">
+  <span id="net-status" style="font-size:11px;padding:4px 10px;border-radius:12px;background:rgba(0,0,0,.2);color:#7de8a8;border:1px solid rgba(125,232,168,.25);">🟢 متصل</span>
+</header>
+
+<div class="layout">
+
+  <!-- SIDEBAR -->
+  <div id="sidebar">
+    <div class="sb-head">
+      <span>📑 فهرس المصحف</span>
+      <button class="sb-close" onclick="closeSidebar()">✕</button>
+    </div>
+    <div id="sb-jump-row" style="padding:10px 12px;border-bottom:1px solid rgba(200,169,110,.15);display:flex;align-items:center;gap:7px;">
+      <span style="color:var(--gold-l);font-size:12px;white-space:nowrap;">انتقل للصفحة:</span>
+      <input type="number" id="sb-pg-input" min="1" placeholder="رقم"
+        style="flex:1;min-width:0;background:rgba(255,255,255,.08);border:1px solid rgba(200,169,110,.3);color:var(--gold-l);border-radius:7px;padding:5px 8px;font-size:13px;outline:none;"
+        onkeydown="if(event.key==='Enter'){sbJump(this.value);this.value='';}"
+        onfocus="this.style.borderColor='#c8a96e'" onblur="this.style.borderColor='rgba(200,169,110,.3)'">
+      <button onclick="sbJump(document.getElementById('sb-pg-input').value);document.getElementById('sb-pg-input').value='';"
+        style="background:linear-gradient(135deg,#7a5c10,#c8a96e);color:#1a0a00;border:none;border-radius:7px;padding:5px 11px;font-size:12px;cursor:pointer;font-weight:700;white-space:nowrap;">
+        انتقل ←
+      </button>
+    </div>
+    <div id="toc-list"><div class="toc-empty">لم يتم تحميل ملف بعد</div></div>
+  </div>
+
+  <!-- MAIN -->
+  <div id="main">
+
+    <div id="toolbar">
+
+      <button class="act-btn toc-btn" onclick="toggleSidebar()">☰ الفهرس</button>
+
+      <!-- وضع التنقل/الرسم -->
+      <button id="mode-btn" class="mode-btn nav" onclick="toggleMode()">🧭 وضع التنقل</button>
+
+      <!-- أدوات الرسم -->
+      <div class="tg">
+        <span class="tg-lbl">أداة</span>
+        <button class="tbtn on" id="tb-pen"       onclick="setTool('pen')"       title="قلم (P)">
+          <svg viewBox="0 0 24 24"><path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a1 1 0 000-1.41l-2.34-2.34a1 1 0 00-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/></svg>
+        </button>
+        <button class="tbtn" id="tb-highlight"  onclick="setTool('highlight')"  title="هايلايت (H)">
+          <svg viewBox="0 0 24 24"><path d="M17.75 7L14 3.25l-10 10 1.06 3.53L2 20h3.5l.47-3.06L17.75 7zm4.43-.72l-2.46-2.46a1 1 0 00-1.41 0L16.5 5.62l3.75 3.75 1.93-1.68a1 1 0 000-1.41z"/></svg>
+        </button>
+        <button class="tbtn" id="tb-eraser"     onclick="setTool('eraser')"     title="ممحاة (E)">
+          <svg viewBox="0 0 24 24"><path d="M16.24 3.56l4.24 4.24c.78.78.78 2.05 0 2.83L11.04 20H4v-7.04L14.17 2.75l.59-.59c.78-.78 2.04-.78 2.83 0zm-5.84 4.38L5 13.34V18h4.66l5.35-5.35-4.61-4.71z"/></svg>
+        </button>
+      </div>
+
+      <!-- حجم الأداة -->
+      <div class="tg">
+        <span class="tg-lbl">حجم</span>
+        <div class="sl-row">
+          <input type="range" id="sz-sl" min="1" max="28" value="3"
+            oninput="penSize=+this.value;document.getElementById('sz-val').textContent=this.value">
+          <span id="sz-val" class="val-lbl">3</span>
+        </div>
+      </div>
+
+      <!-- ألوان القلم -->
+      <div class="tg" id="pen-colors">
+        <span class="tg-lbl">لون</span>
+        <div class="sws">
+          <div class="sw on"  style="background:#1a0a00" data-c="#1a0a00" onclick="pickPen(this)"></div>
+          <div class="sw"     style="background:#c0392b" data-c="#c0392b" onclick="pickPen(this)"></div>
+          <div class="sw"     style="background:#1a5c3a" data-c="#1a5c3a" onclick="pickPen(this)"></div>
+          <div class="sw"     style="background:#1a3a8b" data-c="#1a3a8b" onclick="pickPen(this)"></div>
+          <div class="sw"     style="background:#7d3c98" data-c="#7d3c98" onclick="pickPen(this)"></div>
+        </div>
+      </div>
+
+      <!-- ألوان الهايلايت -->
+      <div class="tg" id="hl-colors" style="display:none">
+        <span class="tg-lbl">تظليل</span>
+        <div class="sws">
+          <div class="sw on" style="background:#ffe03c" data-c="#ffe03c" onclick="pickHL(this)"></div>
+          <div class="sw"    style="background:#3cc864" data-c="#3cc864" onclick="pickHL(this)"></div>
+          <div class="sw"    style="background:#3c96ff" data-c="#3c96ff" onclick="pickHL(this)"></div>
+          <div class="sw"    style="background:#ff783c" data-c="#ff783c" onclick="pickHL(this)"></div>
+          <div class="sw"    style="background:#e63cb4" data-c="#e63cb4" onclick="pickHL(this)"></div>
+        </div>
+      </div>
+
+      <!-- شفافية الهايلايت: من شفاف لغامق -->
+      <div class="op-row" id="hl-opacity" style="display:none">
+        <label>شفاف</label>
+        <input type="range" id="op-sl" min="5" max="100" value="45"
+          oninput="hlOpacity=this.value/100; document.getElementById('op-val').textContent=this.value+'%'">
+        <span id="op-val" class="val-lbl">45%</span>
+        <label>غامق</label>
+      </div>
+
+      <!-- تنقل الصفحات -->
+      <div class="pnav">
+        <button class="pnav-btn" id="btn-prev" onclick="goPage(-1)" disabled>&#8250;</button>
+        <span id="pg-ind">— / —</span>
+        <button class="pnav-btn" id="btn-next" onclick="goPage(1)"  disabled>&#8249;</button>
+        <input type="number" id="pg-jump" min="1" placeholder="صفحة..."
+          style="width:70px;background:rgba(255,255,255,.09);border:1px solid rgba(200,169,110,.3);color:#e8d5a3;border-radius:7px;padding:4px 8px;font-size:12px;text-align:center;outline:none;"
+          onkeydown="if(event.key==='Enter'){jumpPage(this.value);this.value='';}">
+        <button onclick="jumpPage(document.getElementById('pg-jump').value);document.getElementById('pg-jump').value='';"
+          style="background:linear-gradient(135deg,#7a5c10,#c8a96e);color:#1a0a00;border:none;border-radius:7px;padding:5px 10px;font-size:12px;cursor:pointer;font-weight:700;">
+          ←
+        </button>
+      </div>
+
+      <!-- تكبير -->
+      <div class="zm-row">
+        <button class="zm-btn" onclick="zoom(-0.15)">−</button>
+        <span id="zm-lbl">130%</span>
+        <button class="zm-btn" onclick="zoom(+0.15)">+</button>
+      </div>
+
+      <button class="act-btn undo-btn" onclick="undo()">↩ تراجع</button>
+      <button class="act-btn save-btn" onclick="savePage()">💾 حفظ</button>
+      <button class="act-btn" onclick="openFullscreen()" style="background:rgba(100,140,200,.12);color:#a0c4ff;border-color:rgba(100,160,255,.25);">⛶ ملء الشاشة</button>
+
+    </div>
+
+    <!-- منطقة العرض -->
+    <div id="canvas-area">
+      <div id="upload-screen">
+        <div class="upload-card">
+          <span class="orn">📖</span>
+          <h2>المصحف الشريف</h2>
+          <p>ارفع ملف PDF المصحف للبدء<br>في القراءة والتدوين والتلوين</p>
+          <label class="big-lbl" for="file-input">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+            اختر ملف PDF
+          </label>
+          <p class="hint">أو اسحب الملف وأفلته هنا</p>
+        </div>
+      </div>
+      <div id="page-wrap" style="display:none">
+        <canvas id="pdf-cv"></canvas>
+        <canvas id="draw-cv"></canvas>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- FULLSCREEN OVERLAY -->
+<div id="fs-overlay">
+  <div id="fs-page-wrap">
+    <canvas id="fs-pdf-cv"></canvas>
+    <canvas id="fs-draw-cv"></canvas>
+  </div>
+  <!-- أسهم التنقل -->
+  <button class="fs-arrow" id="fs-prev" onclick="fsPage(-1)">&#8250;</button>
+  <button class="fs-arrow" id="fs-next" onclick="fsPage(+1)">&#8249;</button>
+  <!-- شريط أسفل -->
+  <div id="fs-bar">
+    <button class="fs-bar-btn" onclick="fsSwitchMode()">🧭 تنقل</button>
+    <button class="fs-bar-btn" id="fs-mode-lbl" onclick="fsSwitchDrawTool()">✏️ قلم</button>
+    <span id="fs-pg-lbl">1 / 1</span>
+    <input type="number" id="fs-pg-input" min="1" placeholder="صفحة"
+      onkeydown="if(event.key==='Enter'){fsJump(this.value);this.value='';}">
+    <button class="fs-bar-btn" onclick="fsJump(document.getElementById('fs-pg-input').value);document.getElementById('fs-pg-input').value='';">← انتقل</button>
+    <button class="fs-exit-btn" onclick="closeFullscreen()">✕ خروج</button>
+  </div>
+</div>
+<div id="swipe-hint"></div>
+
+<div id="loading"><div class="spin"></div><div class="load-txt">جارٍ التحميل...</div></div>
+<div id="toast"></div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc=
+  'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+/* ── State ── */
+let PDF=null,curPage=1,totPages=0,sc=1.3;
+let tool='pen',navMode=true;
+let penColor='#1a0a00',hlColor='#ffe03c',hlOpacity=0.45,penSize=3;
+let drawing=false,lx=0,ly=0,curStroke=null;
+let strokes={};
+let busy=false;
+
+const pdfCv  = document.getElementById('pdf-cv');
+const drawCv = document.getElementById('draw-cv');
+const pdfCtx = pdfCv.getContext('2d');
+const dCtx   = drawCv.getContext('2d');
+
+/* init cursor */
+applyNavMode();
+
+/* ── File Input ── */
+document.getElementById('file-input').addEventListener('change',async e=>{
+  const f=e.target.files[0];
+  if(!f){return;}
+  if(f.type!=='application/pdf'){toast('اختر ملف PDF صحيح');return;}
+  await loadPDF(f);
+});
+
+/* ── Drag & Drop ── */
+document.getElementById('canvas-area').addEventListener('dragover',e=>e.preventDefault());
+document.getElementById('canvas-area').addEventListener('drop',async e=>{
+  e.preventDefault();
+  const f=e.dataTransfer.files[0];
+  if(f&&f.type==='application/pdf') await loadPDF(f);
+});
+
+/* ── Load PDF ── */
+async function loadPDF(file){
+  showLoad(true);
+  strokes={};
+  try{
+    const buf=await file.arrayBuffer();
+    PDF=await pdfjsLib.getDocument({data:buf}).promise;
+    totPages=PDF.numPages;
+    curPage=1;
+    document.getElementById('upload-screen').style.display='none';
+    document.getElementById('page-wrap').style.display='inline-block';
+    await buildTOC();
+    await renderPage(curPage);
+    toast('✅ تم تحميل '+totPages+' صفحة');
+    document.getElementById('btn-prev').disabled=false;
+    document.getElementById('btn-next').disabled=false;
+    document.getElementById('pg-jump').max=totPages;
+    const sbInput=document.getElementById('sb-pg-input');
+    if(sbInput) sbInput.max=totPages, sbInput.placeholder='1 - '+totPages;
+  }catch(err){toast('خطأ في تحميل الملف');console.error(err);}
+  showLoad(false);
+}
+
+/* ── Table of Contents ── */
+async function buildTOC(){
+  const list=document.getElementById('toc-list');
+  list.innerHTML='';
+  try{
+    const outline=await PDF.getOutline();
+    if(!outline||outline.length===0){
+      list.innerHTML='<div class="toc-empty">لا يوجد فهرس مدمج في هذا الملف<br><small>يمكنك التنقل بالأسهم أو إدخال رقم الصفحة</small></div>';
+      return;
+    }
+    renderOutline(outline,list,0);
+  }catch(e){
+    list.innerHTML='<div class="toc-empty">تعذّر تحميل الفهرس</div>';
+  }
+}
+
+function renderOutline(items,container,depth){
+  items.forEach(item=>{
+    const d=document.createElement('div');
+    d.className='toc-item';
+    d.style.paddingRight=(14+depth*14)+'px';
+    const prefix=depth===0?'📌 ':'└ ';
+    d.textContent=prefix+(item.title||'بدون عنوان');
+    d.title=item.title||'';
+    d.addEventListener('click',()=>gotoItem(item));
+    container.appendChild(d);
+    if(item.items&&item.items.length) renderOutline(item.items,container,depth+1);
+  });
+}
+
+async function gotoItem(item){
+  try{
+    let dest=item.dest;
+    if(typeof dest==='string') dest=await PDF.getDestination(dest);
+    if(!dest) return;
+    const idx=await PDF.getPageIndex(dest[0]);
+    curPage=idx+1;
+    await renderPage(curPage);
+    if(window.innerWidth<700) closeSidebar();
+  }catch(e){console.error(e);}
+}
+
+/* ── Render Page ── */
+async function renderPage(num){
+  if(busy) return;
+  busy=true;
+  showLoad(true);
+  try{
+    const pg=await PDF.getPage(num);
+    const vp=pg.getViewport({scale:sc});
+    pdfCv.width=drawCv.width=vp.width;
+    pdfCv.height=drawCv.height=vp.height;
+    await pg.render({canvasContext:pdfCtx,viewport:vp}).promise;
+    redraw(num);
+    document.getElementById('pg-ind').textContent=num+' / '+totPages;
+    document.getElementById('btn-prev').disabled=num<=1;
+    document.getElementById('btn-next').disabled=num>=totPages;
+  }catch(e){console.error(e);}
+  showLoad(false);
+  busy=false;
+}
+
+function redraw(num){
+  dCtx.clearRect(0,0,drawCv.width,drawCv.height);
+  (strokes[num]||[]).forEach(s=>replayStroke(s));
+}
+
+function replayStroke(s){
+  if(!s.pts||s.pts.length<2) return;
+  dCtx.save();
+  dCtx.lineCap='round';dCtx.lineJoin='round';dCtx.lineWidth=s.size;
+  if(s.eraser){
+    dCtx.globalCompositeOperation='destination-out';
+    dCtx.strokeStyle='rgba(0,0,0,1)';
+  } else if(s.hl){
+    dCtx.globalCompositeOperation='source-over';
+    dCtx.globalAlpha=s.op;
+    dCtx.strokeStyle=s.color;
+  } else {
+    dCtx.globalCompositeOperation='source-over';
+    dCtx.strokeStyle=s.color;
+  }
+  dCtx.beginPath();
+  dCtx.moveTo(s.pts[0].x,s.pts[0].y);
+  for(let i=1;i<s.pts.length;i++) dCtx.lineTo(s.pts[i].x,s.pts[i].y);
+  dCtx.stroke();
+  dCtx.restore();
+}
+
+/* ── Drawing ── */
+function getXY(e){
+  const r=drawCv.getBoundingClientRect();
+  const sx=drawCv.width/r.width,sy=drawCv.height/r.height;
+  const src=e.touches?e.touches[0]:e;
+  return{x:(src.clientX-r.left)*sx,y:(src.clientY-r.top)*sy};
+}
+
+drawCv.addEventListener('mousedown', e=>{if(!navMode) startD(e);});
+drawCv.addEventListener('mousemove', e=>{if(!navMode) moveD(e);});
+drawCv.addEventListener('mouseup',   ()=>endD());
+drawCv.addEventListener('mouseleave',()=>endD());
+drawCv.addEventListener('touchstart', e=>{if(!navMode){e.preventDefault();startD(e);}},{passive:false});
+drawCv.addEventListener('touchmove',  e=>{if(!navMode){e.preventDefault();moveD(e);}},{passive:false});
+drawCv.addEventListener('touchend',   ()=>endD());
+
+function startD(e){
+  drawing=true;
+  const p=getXY(e);lx=p.x;ly=p.y;
+  curStroke={
+    pts:[{x:lx,y:ly}],
+    color:tool==='highlight'?hlColor:penColor,
+    size:tool==='eraser'?penSize*5:tool==='highlight'?penSize*6:penSize,
+    hl:tool==='highlight',
+    eraser:tool==='eraser',
+    op:hlOpacity
+  };
+}
+
+function moveD(e){
+  if(!drawing) return;
+  const p=getXY(e);
+  dCtx.save();
+  dCtx.lineCap='round';dCtx.lineJoin='round';
+  if(tool==='eraser'){
+    dCtx.globalCompositeOperation='destination-out';
+    dCtx.strokeStyle='rgba(0,0,0,1)';
+    dCtx.lineWidth=penSize*5;
+  } else if(tool==='highlight'){
+    dCtx.globalCompositeOperation='source-over';
+    dCtx.globalAlpha=hlOpacity;
+    dCtx.strokeStyle=hlColor;
+    dCtx.lineWidth=penSize*6;
+  } else {
+    dCtx.globalCompositeOperation='source-over';
+    dCtx.strokeStyle=penColor;
+    dCtx.lineWidth=penSize;
+  }
+  dCtx.beginPath();dCtx.moveTo(lx,ly);dCtx.lineTo(p.x,p.y);dCtx.stroke();
+  dCtx.restore();
+  curStroke.pts.push({x:p.x,y:p.y});
+  lx=p.x;ly=p.y;
+}
+
+function endD(){
+  if(!drawing) return;
+  drawing=false;
+  if(curStroke&&curStroke.pts.length>1){
+    if(!strokes[curPage]) strokes[curPage]=[];
+    strokes[curPage].push({...curStroke,pts:[...curStroke.pts]});
+  }
+  curStroke=null;
+}
+
+/* ── Mode ── */
+function toggleMode(){
+  navMode=!navMode;
+  applyNavMode();
+}
+
+function applyNavMode(){
+  const btn=document.getElementById('mode-btn');
+  if(!btn) return;
+  if(navMode){
+    btn.className='mode-btn nav';btn.textContent='🧭 وضع التنقل';
+    drawCv.style.pointerEvents='none';
+    drawCv.style.cursor='default';
+  } else {
+    btn.className='mode-btn draw';btn.textContent='✏️ وضع الرسم';
+    drawCv.style.pointerEvents='auto';
+    drawCv.style.cursor=tool==='eraser'?'cell':'crosshair';
+  }
+}
+
+/* ── Tool ── */
+function setTool(t){
+  tool=t;
+  ['pen','highlight','eraser'].forEach(x=>document.getElementById('tb-'+x).classList.toggle('on',x===t));
+  document.getElementById('pen-colors').style.display=t==='pen'?'':'none';
+  document.getElementById('hl-colors').style.display=t==='highlight'?'':'none';
+  document.getElementById('hl-opacity').style.display=t==='highlight'?'':'none';
+  if(!navMode) drawCv.style.cursor=t==='eraser'?'cell':'crosshair';
+}
+
+/* ── Colors ── */
+function pickPen(el){
+  penColor=el.dataset.c;
+  document.querySelectorAll('#pen-colors .sw').forEach(s=>s.classList.remove('on'));
+  el.classList.add('on');
+}
+function pickHL(el){
+  hlColor=el.dataset.c;
+  document.querySelectorAll('#hl-colors .sw').forEach(s=>s.classList.remove('on'));
+  el.classList.add('on');
+}
+
+/* ── Navigation ── */
+async function goPage(d){
+  const n=curPage+d;
+  if(!PDF||n<1||n>totPages) return;
+  curPage=n;await renderPage(curPage);
+}
+async function jumpPage(v){
+  const n=parseInt(v);
+  if(isNaN(n)||n<1||n>totPages){toast('رقم الصفحة غير صحيح');return;}
+  curPage=n;await renderPage(curPage);
+}
+
+async function sbJump(v){
+  await jumpPage(v);
+}
+
+/* ── Zoom ── */
+async function zoom(d){
+  sc=Math.max(0.4,Math.min(3.5,sc+d));
+  document.getElementById('zm-lbl').textContent=Math.round(sc*100)+'%';
+  if(PDF) await renderPage(curPage);
+}
+
+/* ── Undo ── */
+function undo(){
+  if(!strokes[curPage]||!strokes[curPage].length){toast('لا يوجد شيء للتراجع عنه');return;}
+  strokes[curPage].pop();redraw(curPage);toast('تم التراجع ↩');
+}
+
+/* ── Save ── */
+function savePage(){
+  const m=document.createElement('canvas');
+  m.width=pdfCv.width;m.height=pdfCv.height;
+  const c=m.getContext('2d');
+  c.drawImage(pdfCv,0,0);c.drawImage(drawCv,0,0);
+  const a=document.createElement('a');
+  a.download='مصحف-صفحة-'+curPage+'.png';
+  a.href=m.toDataURL('image/png');a.click();
+  toast('✅ تم حفظ الصفحة '+curPage);
+}
+
+/* ── Sidebar ── */
+function toggleSidebar(){document.getElementById('sidebar').classList.toggle('open');}
+function closeSidebar(){document.getElementById('sidebar').classList.remove('open');}
+
+/* ── Helpers ── */
+function showLoad(v){document.getElementById('loading').classList.toggle('show',v);}
+let tt;
+function toast(msg){
+  const el=document.getElementById('toast');
+  el.textContent=msg;el.classList.add('show');
+  clearTimeout(tt);tt=setTimeout(()=>el.classList.remove('show'),2600);
+}
+
+/* ════════════════════════════════════════
+   FULLSCREEN
+════════════════════════════════════════ */
+const fsOverlay  = document.getElementById('fs-overlay');
+const fsPdfCv    = document.getElementById('fs-pdf-cv');
+const fsDrawCv   = document.getElementById('fs-draw-cv');
+const fsPdfCtx   = fsPdfCv.getContext('2d');
+const fsDrawCtx  = fsDrawCv.getContext('2d');
+let fsNavMode    = true;   // true=تنقل  false=رسم
+let fsDrawTool   = 'pen';  // pen | highlight | eraser
+let fsDrawing    = false, fsLx=0, fsLy=0, fsCurStroke=null;
+
+async function openFullscreen(){
+  if(!PDF){ toast('حمّل ملف PDF أولاً'); return; }
+  fsOverlay.classList.add('show');
+  document.getElementById('fs-pg-input').max = totPages;
+  // طلب وضع ملء الشاشة الحقيقي من المتصفح
+  try{ document.documentElement.requestFullscreen && document.documentElement.requestFullscreen(); }catch(e){}
+  await fsRenderPage(curPage);
+  updateFsBar();
+  showSwipeHint();
+}
+
+function closeFullscreen(){
+  fsOverlay.classList.remove('show');
+  try{ document.exitFullscreen && document.exitFullscreen(); }catch(e){}
+}
+
+// ── Render في الـ fullscreen ──
+async function fsRenderPage(num){
+  if(!PDF) return;
+  showLoad(true);
+  try{
+    const pg  = await PDF.getPage(num);
+    // احسب الـ scale بحيث تملأ الشاشة
+    const vw  = window.innerWidth, vh = window.innerHeight - 60;
+    const raw = pg.getViewport({scale:1});
+    const sc2 = Math.min(vw/raw.width, vh/raw.height);
+    const vp  = pg.getViewport({scale: sc2});
+    fsPdfCv.width = fsDrawCv.width  = vp.width;
+    fsPdfCv.height= fsDrawCv.height = vp.height;
+    await pg.render({canvasContext:fsPdfCtx, viewport:vp}).promise;
+    fsRedraw(num);
+    updateFsBar();
+  }catch(e){ console.error(e); }
+  showLoad(false);
+}
+
+function fsRedraw(num){
+  fsDrawCtx.clearRect(0,0,fsDrawCv.width,fsDrawCv.height);
+  // ارسم نفس الـ strokes بنسبة مقياس مختلفة
+  const scaleRatio = fsPdfCv.width / (pdfCv.width || fsPdfCv.width);
+  (strokes[num]||[]).forEach(s=>fsReplayStroke(s, scaleRatio));
+}
+
+function fsReplayStroke(s, ratio){
+  if(!s.pts||s.pts.length<2) return;
+  fsDrawCtx.save();
+  fsDrawCtx.lineCap='round'; fsDrawCtx.lineJoin='round';
+  fsDrawCtx.lineWidth = s.size * ratio;
+  if(s.eraser){
+    fsDrawCtx.globalCompositeOperation='destination-out';
+    fsDrawCtx.strokeStyle='rgba(0,0,0,1)';
+  } else if(s.hl){
+    fsDrawCtx.globalCompositeOperation='source-over';
+    fsDrawCtx.globalAlpha=s.op;
+    fsDrawCtx.strokeStyle=s.color;
+  } else {
+    fsDrawCtx.globalCompositeOperation='source-over';
+    fsDrawCtx.strokeStyle=s.color;
+  }
+  fsDrawCtx.beginPath();
+  fsDrawCtx.moveTo(s.pts[0].x*ratio, s.pts[0].y*ratio);
+  for(let i=1;i<s.pts.length;i++) fsDrawCtx.lineTo(s.pts[i].x*ratio, s.pts[i].y*ratio);
+  fsDrawCtx.stroke();
+  fsDrawCtx.restore();
+}
+
+function updateFsBar(){
+  document.getElementById('fs-pg-lbl').textContent = curPage+' / '+totPages;
+  document.getElementById('fs-prev').disabled = curPage<=1;
+  document.getElementById('fs-next').disabled = curPage>=totPages;
+}
+
+async function fsPage(d){
+  const n=curPage+d;
+  if(!PDF||n<1||n>totPages) return;
+  curPage=n;
+  await fsRenderPage(curPage);
+  // حدّث الصفحة الأصلية كمان
+  redraw(curPage);
+  document.getElementById('pg-ind').textContent=curPage+' / '+totPages;
+}
+
+async function fsJump(v){
+  const n=parseInt(v);
+  if(isNaN(n)||n<1||n>totPages){ toast('رقم غير صحيح'); return; }
+  curPage=n;
+  await fsRenderPage(curPage);
+  redraw(curPage);
+  document.getElementById('pg-ind').textContent=curPage+' / '+totPages;
+}
+
+// وضع الرسم/التنقل داخل الـ fullscreen
+function fsSwitchMode(){
+  fsNavMode=!fsNavMode;
+  const btn=document.getElementById('fs-mode-lbl');
+  const modeBtn=document.querySelector('#fs-bar .fs-bar-btn');
+  if(fsNavMode){
+    document.querySelector('#fs-bar .fs-bar-btn').textContent='🧭 تنقل';
+    fsDrawCv.style.pointerEvents='none';
+    fsDrawCv.style.cursor='default';
+  } else {
+    document.querySelector('#fs-bar .fs-bar-btn').textContent='✏️ رسم';
+    fsDrawCv.style.pointerEvents='auto';
+    fsDrawCv.style.cursor=fsDrawTool==='eraser'?'cell':'crosshair';
+  }
+}
+
+function fsSwitchDrawTool(){
+  const tools=['pen','highlight','eraser'];
+  const emojis=['✏️ قلم','🖊️ هايلايت','🧹 ممحاة'];
+  const i=(tools.indexOf(fsDrawTool)+1)%3;
+  fsDrawTool=tools[i];
+  document.getElementById('fs-mode-lbl').textContent=emojis[i];
+  if(!fsNavMode) fsDrawCv.style.cursor=fsDrawTool==='eraser'?'cell':'crosshair';
+}
+
+// ── رسم داخل fullscreen ──
+function getFsXY(e){
+  const r=fsDrawCv.getBoundingClientRect();
+  const sx=fsDrawCv.width/r.width, sy=fsDrawCv.height/r.height;
+  const src=e.touches?e.touches[0]:e;
+  // حوّل للإحداثيات الأصلية (scale العادي)
+  const mainRatio = pdfCv.width > 0 ? pdfCv.width/fsPdfCv.width : 1;
+  return{
+    x:(src.clientX-r.left)*sx*mainRatio,
+    y:(src.clientY-r.top)*sy*mainRatio,
+    fx:(src.clientX-r.left)*sx,
+    fy:(src.clientY-r.top)*sy
+  };
+}
+
+fsDrawCv.addEventListener('mousedown', e=>{ if(!fsNavMode) startFsDraw(e); });
+fsDrawCv.addEventListener('mousemove', e=>{ if(!fsNavMode) moveFsDraw(e);  });
+fsDrawCv.addEventListener('mouseup',   ()=>endFsDraw());
+fsDrawCv.addEventListener('mouseleave',()=>endFsDraw());
+fsDrawCv.addEventListener('touchstart', e=>{ if(!fsNavMode){e.preventDefault();startFsDraw(e);}},{passive:false});
+fsDrawCv.addEventListener('touchmove',  e=>{ if(!fsNavMode){e.preventDefault();moveFsDraw(e);}},{passive:false});
+fsDrawCv.addEventListener('touchend',   ()=>endFsDraw());
+
+function startFsDraw(e){
+  fsDrawing=true;
+  const p=getFsXY(e);
+  fsLx=p.fx; fsLy=p.fy;
+  fsCurStroke={
+    pts:[{x:p.x,y:p.y}],
+    color: fsDrawTool==='highlight'?hlColor:penColor,
+    size:  fsDrawTool==='eraser'?penSize*5:fsDrawTool==='highlight'?penSize*6:penSize,
+    hl:    fsDrawTool==='highlight',
+    eraser:fsDrawTool==='eraser',
+    op:    hlOpacity
+  };
+}
+
+function moveFsDraw(e){
+  if(!fsDrawing) return;
+  const p=getFsXY(e);
+  fsDrawCtx.save();
+  fsDrawCtx.lineCap='round'; fsDrawCtx.lineJoin='round';
+  const ratio = fsPdfCv.width/(pdfCv.width||fsPdfCv.width);
+  if(fsDrawTool==='eraser'){
+    fsDrawCtx.globalCompositeOperation='destination-out';
+    fsDrawCtx.strokeStyle='rgba(0,0,0,1)';
+    fsDrawCtx.lineWidth=penSize*5*ratio;
+  } else if(fsDrawTool==='highlight'){
+    fsDrawCtx.globalCompositeOperation='source-over';
+    fsDrawCtx.globalAlpha=hlOpacity;
+    fsDrawCtx.strokeStyle=hlColor;
+    fsDrawCtx.lineWidth=penSize*6*ratio;
+  } else {
+    fsDrawCtx.globalCompositeOperation='source-over';
+    fsDrawCtx.strokeStyle=penColor;
+    fsDrawCtx.lineWidth=penSize*ratio;
+  }
+  fsDrawCtx.beginPath(); fsDrawCtx.moveTo(fsLx,fsLy); fsDrawCtx.lineTo(p.fx,p.fy); fsDrawCtx.stroke();
+  fsDrawCtx.restore();
+  fsCurStroke.pts.push({x:p.x,y:p.y});
+  fsLx=p.fx; fsLy=p.fy;
+}
+
+function endFsDraw(){
+  if(!fsDrawing) return;
+  fsDrawing=false;
+  if(fsCurStroke&&fsCurStroke.pts.length>1){
+    if(!strokes[curPage]) strokes[curPage]=[];
+    strokes[curPage].push({...fsCurStroke,pts:[...fsCurStroke.pts]});
+  }
+  fsCurStroke=null;
+}
+
+/* ════════════════════════════════════════
+   SWIPE للتنقل بين الصفحات
+════════════════════════════════════════ */
+let swTouchX=0, swTouchY=0, swTouches=0;
+
+function initSwipe(el, onSwipe){
+  el.addEventListener('touchstart', e=>{
+    if(e.touches.length===1){
+      swTouchX=e.touches[0].clientX;
+      swTouchY=e.touches[0].clientY;
+    }
+  },{passive:true});
+  el.addEventListener('touchend', e=>{
+    if(e.changedTouches.length===1){
+      const dx=swTouchX - e.changedTouches[0].clientX;
+      const dy=swTouchY - e.changedTouches[0].clientY;
+      if(Math.abs(dx)>Math.abs(dy) && Math.abs(dx)>50){
+        onSwipe(dx>0 ? 'left':'right');
+      } else if(Math.abs(dy)>Math.abs(dx) && Math.abs(dy)>60){
+        onSwipe(dy>0 ? 'up':'down');
+      }
+    }
+  },{passive:true});
+}
+
+// Swipe في الـ fullscreen (دائماً شغّال)
+initSwipe(fsOverlay, dir=>{
+  if(dir==='left'  || dir==='up')   fsPage(+1);
+  if(dir==='right' || dir==='down') fsPage(-1);
+});
+
+// Swipe في الصفحة العادية (فقط في وضع التنقل)
+initSwipe(document.getElementById('canvas-area'), dir=>{
+  if(!navMode) return;  // لو وضع الرسم لا تنقّل
+  if(dir==='left'  || dir==='up')   goPage(+1);
+  if(dir==='right' || dir==='down') goPage(-1);
+});
+
+// hint للـ swipe
+function showSwipeHint(){
+  const h=document.getElementById('swipe-hint');
+  h.textContent='← اسحب يساراً للصفحة التالية | يميناً للسابقة →';
+  h.classList.add('show');
+  setTimeout(()=>h.classList.remove('show'),2500);
+}
+
+// إخفاء/إظهار شريط الـ fullscreen بالضغط
+let fsBarTimer;
+fsOverlay.addEventListener('click', e=>{
+  if(e.target===fsOverlay||e.target===fsPdfCv){
+    const bar=document.getElementById('fs-bar');
+    bar.classList.toggle('hidden');
+    clearTimeout(fsBarTimer);
+    if(!bar.classList.contains('hidden')){
+      fsBarTimer=setTimeout(()=>bar.classList.add('hidden'),4000);
+    }
+  }
+});
+
+// إغلاق fullscreen بـ Escape
+document.addEventListener('fullscreenchange',()=>{
+  if(!document.fullscreenElement) fsOverlay.classList.remove('show');
+});
+
+/* ── Keyboard additions ── */
+document.addEventListener('keydown',e=>{
+  if(e.target.tagName==='INPUT') return;
+  if(e.key==='ArrowRight') {
+    if(fsOverlay.classList.contains('show')) fsPage(-1);
+    else goPage(-1);
+  }
+  if(e.key==='ArrowLeft')  {
+    if(fsOverlay.classList.contains('show')) fsPage(+1);
+    else goPage(+1);
+  }
+  if(e.key==='F'||e.key==='f') openFullscreen();
+  if(e.key==='Escape'){ if(fsOverlay.classList.contains('show')) closeFullscreen(); }
+});
+
+// تحديث حجم الـ fullscreen لو تغيّرت الشاشة
+window.addEventListener('resize',()=>{
+  if(fsOverlay.classList.contains('show') && PDF) fsRenderPage(curPage);
+});
+
+/* ── Online / Offline status ── */
+function updateNetStatus(){
+  const el=document.getElementById('net-status');
+  if(!el) return;
+  if(navigator.onLine){
+    el.textContent='🟢 متصل';
+    el.style.color='#7de8a8';
+    el.style.borderColor='rgba(125,232,168,.25)';
+  } else {
+    el.textContent='🔴 بدون إنترنت';
+    el.style.color='#ff9a9a';
+    el.style.borderColor='rgba(255,100,100,.25)';
+  }
+}
+window.addEventListener('online',  ()=>{ updateNetStatus(); toast('✅ عاد الاتصال بالإنترنت'); });
+window.addEventListener('offline', ()=>{ updateNetStatus(); toast('📴 وضع بدون إنترنت - التطبيق يعمل من الكاش'); });
+updateNetStatus();
+
+/* ── أول زيارة: أعلم المستخدم بالكاش ── */
+window.addEventListener('load', ()=>{
+  if('serviceWorker' in navigator){
+    navigator.serviceWorker.ready.then(()=>{
+      // أول ما يتحمّل PDF.js من الكاش بدل الإنترنت
+      setTimeout(()=>{
+        if(!navigator.onLine) toast('📴 يعمل بدون إنترنت من الكاش');
+        else toast('✅ تم حفظ التطبيق للعمل بدون إنترنت');
+      }, 1500);
+    });
+  }
+});
+</script>
+</body>
+</html>
